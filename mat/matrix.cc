@@ -4,6 +4,7 @@
 #include<cassert>
 #include<cstdlib>
 #include<chrono>
+#include"common/utils.h"
 
 #define N 1024
 
@@ -45,11 +46,6 @@ void compare_mat(float A[N][N],float B[N][N])
         for(int j=0;j<N;j++)
             assert(fabs(A[i][j]-B[i][j]) < 1e-5);
 
-}
-
-int64_t get_current_time_ms()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 float A[N][N],B[N][N];
