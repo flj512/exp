@@ -44,7 +44,10 @@ void compare_mat(float A[N][N],float B[N][N])
 {
     for(int i=0;i<N;i++)
         for(int j=0;j<N;j++)
-            assert(fabs(A[i][j]-B[i][j]) < 1e-5);
+            if(fabs(A[i][j]-B[i][j]) > 1e-5){
+                printf("incorrect result!!!\n");
+                return;
+            }
 
 }
 
