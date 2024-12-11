@@ -5,6 +5,10 @@
 #include<cstdlib>
 #include<chrono>
 #include"common/utils.h"
+#define AVX512F_CHECK defined(__GNUC__)&&defined(__AVX512F__)
+#if AVX512F_CHECK
+    #include<immintrin.h>
+#endif
 
 #define N 1024
 
@@ -39,6 +43,27 @@ void matmul_2(float out[N][N], const float A[N][N],const float B[N][N])
                 out[i][k] += A[i][j]*B[j][k];
 }
 
+#if AVX512F_CHECK
+void matmul_avx512(float out[N][N], const float A[N][N],const float B[N][N])
+{
+    const int BLOCK_SIZE= 16;
+    size_t mat_size = N*N*sizeof(float);
+    memset(out,0,mat_size);
+
+    #pragma omp parallel for
+    for(int i=0;i<N;i++)
+        for(int j=0;j<N;j++)
+        {
+            __m512 a = _mm512_set1_ps(A[i][j]);
+            for(int k=0;k<N;k+=BLOCK_SIZE){
+                __m512 b = _mm512_load_ps(&B[j][k]);
+                __m512 c = _mm512_load_ps(&out[i][k]);
+                __m512 r = _mm512_mul_ps(a,b);
+                _mm512_store_ps(&out[i][k],_mm512_add_ps(c,r));
+            }
+        }
+}
+#endif
 
 void compare_mat(float A[N][N],float B[N][N])
 {
@@ -51,8 +76,8 @@ void compare_mat(float A[N][N],float B[N][N])
 
 }
 
-float A[N][N],B[N][N];
-float C1[N][N],C2[N][N];
+alignas(64) float A[N][N],B[N][N];
+alignas(64) float C1[N][N],C2[N][N],C3[N][N];
 
 int main(int argc,char* argv[])
 {
@@ -70,5 +95,13 @@ int main(int argc,char* argv[])
     printf("matmul_1 = %ld ms\n",get_current_time_ms()-start);
 
     compare_mat(C1,C2);
+
+#if AVX512F_CHECK
+    start = get_current_time_ms();
+    matmul_avx512(C3,A,B);
+    printf("matmul_avx512 = %ld ms\n",get_current_time_ms()-start);
+    compare_mat(C1,C3);
+#endif
+
     return 0;
 }
