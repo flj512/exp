@@ -16,6 +16,6 @@ endif()
 
 # omp scheduler 
 if(OpenMP_CXX_FOUND)
-    add_executable(omp_sched omp_scheduler.cc)
-    target_link_libraries(omp_sched PRIVATE OpenMP::OpenMP_CXX)
+    add_executable(omp_test omp_test.cc)
+    target_link_libraries(omp_test PRIVATE OpenMP::OpenMP_CXX)
 endif()
