@@ -4,6 +4,8 @@
 #include<cassert>
 #include<cstdlib>
 #include<chrono>
+#include<vector>
+#include<memory>
 #include"common/utils.h"
 #define AVX512F_CHECK defined(__GNUC__)&&defined(__AVX512F__)
 #if AVX512F_CHECK
@@ -12,11 +14,12 @@
 
 #define N (1024) // only test NxN matrix, N is multiple of 16
 
-float* make_buffer()
+typedef std::shared_ptr<float> BufferPtr;
+BufferPtr make_buffer(int n=N,int s=N)
 {
-    const int buffer_size = N*N*sizeof(float);
+    const int buffer_size = n*s*sizeof(float);
     const int aliagn = 64;
-    return (float*)std::aligned_alloc(aliagn, buffer_size);    
+    return BufferPtr((float*)std::aligned_alloc(aliagn, buffer_size),[](float* p){std::free(p);});    
 }
 
 void print_matrix(const float* m,int n,int s, const char * tag=nullptr)
@@ -30,11 +33,14 @@ void print_matrix(const float* m,int n,int s, const char * tag=nullptr)
     }
 }
 
-void mat_init(float *m, int n) // nxn mat, stride = n
+#define ADD_OMP_THREADS 4
+void mat_init(float *m, int n,bool random=true) // nxn mat, stride = n
 {
+    float d = 1.0f/n;
+    #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for(int i=0;i<n;i++)
         for(int j=0;j<n;j++)
-            m[i*n+j] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+            m[i*n+j] = random ?static_cast <float> (rand()) / static_cast <float> (RAND_MAX): j*d;
 }
 
 void mat_clear(float *m, int n, int s)
@@ -55,7 +61,7 @@ void matmul_base(float* out, const float* A,const float* B, int n, int s)
 }
 void matadd_base(float* out, const float* A,const float* B, int n, int s)
 {
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for(int i=0;i<n;i++)
         for(int j=0;j<n;j++)
             out[i*s+j]=A[i*s+j]+B[i*s+j];
@@ -63,7 +69,7 @@ void matadd_base(float* out, const float* A,const float* B, int n, int s)
 
 void matsub_base(float* out, const float* A,const float* B, int n, int s)
 {
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for(int i=0;i<n;i++)
         for(int j=0;j<n;j++)
             out[i*s+j]=A[i*s+j]-B[i*s+j];
@@ -120,7 +126,7 @@ void matadd_avx512(float* out, const float* A,const float* B, int n, int s)
 {
     const int AVX_FLOAT_SIZE= 16;
 
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for(int i=0;i<n;i++)
         for(int j=0;j<n;j+=AVX_FLOAT_SIZE){
             __m512 a = _mm512_load_ps(&A[i*s+j]);
@@ -134,7 +140,7 @@ void matsub_avx512(float* out, const float* A,const float* B, int n, int s)
 {
     const int AVX_FLOAT_SIZE= 16;
 
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for(int i=0;i<n;i++)
         for(int j=0;j<n;j+=AVX_FLOAT_SIZE){
             __m512 a = _mm512_load_ps(&A[i*s+j]);
@@ -253,73 +259,98 @@ void matmul_strassen_(float* out, const float* A,const float* B, int n, int s,fl
 
 void matmul_strassen(float* out, const float* A,const float* B, int n, int s)
 {
-    auto buffer = make_buffer(); // it's ok, because n = N, s=N in this benchmark
-    matmul_strassen_(out,A,B,n,s,buffer);
-    std::free(buffer);
+    auto buffer = make_buffer(n,s);
+    matmul_strassen_(out,A,B,n,s,buffer.get());
 }
 
-void compare_mat(const float* A,const float* B,int n,int s)
+void mat_compare(const float* A,const float* B,int n,int s)
 {
     for(int i=0;i<n;i++)
         for(int j=0;j<n;j++){
             auto a = A[i*s+j];
             auto b = B[i*s+j];
             float err = fabs(a) > 1 ? fabs(a-b)/fabs(a):fabs(a-b);
-            if(err > 1e-4){
+            if(err > 1e-4){ // the error of strassen algorithm may be greater than 1e-5
                 printf("incorrect result,(%f != %f,error=%f) @ [%d,%d]!!!\n",a,b,err,i,j);
                 return;
             }
         }
 }
 
-#define BENCHMARK_FUNCTION(C,A,B,func,n,s,BC,CNT) \
-{\
-    auto start = get_current_time_ms();\
-    for(int i=0;i<(CNT);i++)\
-        func(C,A,B,n,s);\
-    printf(#func" = %0.2f ms\n",(float)(get_current_time_ms()-start)/(CNT));\
-    if((BC)!=nullptr) compare_mat(C,BC,n,s);\
-}
-
-int main(int argc,char* argv[])
+void benchmark_fun(void(func)(float*, const float*,const float*, int, int),int cnt,const char* tag)
 {
-    const int N_1024 = N/1024;
-    const int DEFAULT_LOOP = 100;
-    const int LOOP_CNT = N_1024 <= 1? DEFAULT_LOOP : std::max(1, DEFAULT_LOOP/(N_1024*N_1024*N_1024));
-
-    auto A = make_buffer();
-    auto B = make_buffer();
-    auto BC1= make_buffer();
-    auto BC2= make_buffer();
-    auto BC= make_buffer();
-    auto C= make_buffer();
-
-    mat_init(A,N);
-    mat_init(B,N);
-
-    printf("%dx%d matrix multiplication benchmark.\n",N,N);
-
-    if(N_1024<=1){
-        BENCHMARK_FUNCTION(BC,A,B,matmul_base,N,N,nullptr,1)
+    std::vector<BufferPtr> A,B,C;
+    for(int i=0;i<cnt;i++){
+        A.push_back(make_buffer());
+        B.push_back(make_buffer());
+        C.push_back(make_buffer());
+        mat_init(A.back().get(),N,false);
+        mat_init(B.back().get(),N,false);
     }
 
-    BENCHMARK_FUNCTION(C,A,B,matmul_cache_friendly,N,N,N_1024<=1?BC:nullptr,LOOP_CNT)
-    BENCHMARK_FUNCTION(BC1,A,B,matadd_base,N,N,nullptr,DEFAULT_LOOP)
-    BENCHMARK_FUNCTION(BC2,A,B,matsub_base,N,N,nullptr,DEFAULT_LOOP)
+    auto start = get_current_time_us();
+    for(int i=0;i<cnt;i++)
+        func(C[i].get(),A[i].get(),B[i].get(),N,N);
+    printf("%s = %0.3f ms, %d times\n",tag,(get_current_time_us()-start)/1000.0f/cnt,cnt);
+}
+
+#define BENCHMARK_FUNCTION(func,cnt) benchmark_fun(func,(cnt),#func)
+
+void check_correct()
+{
+    printf("------ check correct ------\n");
+    const int SIZE = 1024;
+    std::vector<BufferPtr> buffers;
+    auto alloctor = [&buffers]()->float*{
+        buffers.push_back(make_buffer(SIZE,SIZE));
+        return buffers.back().get();
+    };
+    auto A = alloctor();
+    auto B = alloctor();
+    auto C1= alloctor();  
+    auto C2= alloctor(); 
+
+    mat_init(A,SIZE);
+    mat_init(B,SIZE);
+
+    matmul_base(C1,A,B,SIZE,SIZE);
+
+    printf("check matmul_cache_friendly\n");
+    matmul_cache_friendly(C2,A,B,SIZE,SIZE);
+    mat_compare(C1,C2,SIZE,SIZE);
+
+    printf("check matmul_avx512\n");
+    matmul_avx512(C2,A,B,SIZE,SIZE);
+    mat_compare(C1,C2,SIZE,SIZE);
+    
+    printf("check matmul_strassen\n");
+    matmul_strassen(C2,A,B,SIZE,SIZE);
+    mat_compare(C1,C2,SIZE,SIZE);
+}
+int main(int argc,char* argv[])
+{
+    check_correct();
+    const float N_1024 = N/1024.0;
+    const int DEFAULT_LOOP = 100;
+    const int MUL_LOOP_CNT = (int)(N_1024 <= 1? DEFAULT_LOOP : std::max(1.0f, DEFAULT_LOOP/(N_1024*N_1024*N_1024)));
+    const int ADD_LOOP_CNT = (int)std::max(1.0f, DEFAULT_LOOP*4/(N_1024*N_1024));
+
+    printf("\n------ %dx%d matrix benchmark ------\n",N,N);
+
+    if(N_1024<=1){
+        BENCHMARK_FUNCTION(matmul_base,1);
+    }
+
+    BENCHMARK_FUNCTION(matmul_cache_friendly,MUL_LOOP_CNT);
+    BENCHMARK_FUNCTION(matadd_base,ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matsub_base,ADD_LOOP_CNT);
 
 #if AVX512F_CHECK
-    BENCHMARK_FUNCTION(BC,A,B,matadd_avx512,N,N,BC1,DEFAULT_LOOP)
-    BENCHMARK_FUNCTION(BC,A,B,matsub_avx512,N,N,BC2,DEFAULT_LOOP)
-    BENCHMARK_FUNCTION(BC,A,B,matmul_avx512,N,N,C,LOOP_CNT)
+    BENCHMARK_FUNCTION(matadd_avx512,ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matsub_avx512,ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matmul_avx512,MUL_LOOP_CNT);
 #endif
 
-    BENCHMARK_FUNCTION(BC,A,B,matmul_strassen,N,N,C,LOOP_CNT)
-
-    std::free(A);
-    std::free(B);
-    std::free(BC);
-    std::free(BC1);
-    std::free(BC2);
-    std::free(C);
+    BENCHMARK_FUNCTION(matmul_strassen,MUL_LOOP_CNT);
     return 0;
 }

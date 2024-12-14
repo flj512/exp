@@ -2,23 +2,24 @@ import torch
 import time
 
 N = 1024
-a = torch.randn(N,N)
-b = torch.randn(N,N)
 
-N_1024 = N//1024
-DEFAULT_CNT = 100
-LOOP_CNT = 100 if N_1024 <= 1 else max(1,100//(N_1024*N_1024*N_1024))
+N_1024 = N/1024
 
-a.matmul(b)
+def mat_benchmark(op,cnt:int, tag:str)->None:
+    A = [torch.randn(N,N) for _ in range(cnt)]
+    B = [torch.randn(N,N) for _ in range(cnt)]
+    C = [torch.randn(N,N) for _ in range(cnt)]
+    start = time.perf_counter()
+    for a,b,c in zip(A,B,C):
+        c = op(a,b)
+    print(f"torch cpu {tag} {(time.perf_counter()-start)*1000/cnt:0.3f} ms, {cnt} times")
 
-start = time.perf_counter()
-for i in range(LOOP_CNT):
-    c = a.matmul(b)
+print(f"{N}x{N} matrix benchmark")
 
-print(f"torch cpu mul {(time.perf_counter()-start)*1000/LOOP_CNT:0.3f} ms")
+MUL_CNT = 100
+loop_cnt = MUL_CNT if N_1024 <= 1 else max(1,MUL_CNT//(N_1024*N_1024*N_1024))
+mat_benchmark(lambda a,b: a.matmul(b),int(loop_cnt),"mul")
 
-start = time.perf_counter()
-for i in range(DEFAULT_CNT):
-    c = a + b
-
-print(f"torch cpu add {(time.perf_counter()-start)*1000/DEFAULT_CNT:0.3f} ms")
+ADD_CNT = 400
+loop_cnt = int(max(1,ADD_CNT//(N_1024*N_1024)))
+mat_benchmark(lambda a,b: a+b,loop_cnt,"add")
