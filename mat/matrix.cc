@@ -188,47 +188,21 @@ inline T* mat_block2(int x,int y,T* m,int n,int s,int B)
     int block_size = n/B;
     return m + x*block_size*s + y*block_size;
 }
-void matmul_avx512_128x128(float* out, const float* A,const float* B, int n, int s)
-{  
-    int BLOCK_NUM = 4; // 32x32 32x32 block
-    n = 128;
-    mat_clear(out,n,s);
 
-    /*
-        32x32 32x32 blocks
+void matmul_avx512_block(float* out, const float* A,const float* B, int n, int s)
+{
+    int BLOCK_NUM = n/16;
+    
+    mat_clear(out,n,s);    
 
-        0  1  2  3 .....31
-        32 .............63
-        ..................
-        992...........1023
-        
-        thread 0->(0,1,2,3)
-                  (32....35)
-                  (64......)
-                  (96......)
-        thread 1->(4,5,6,6)
-                  (36.....)
-        ....
-        thread 7->(28......)
-                  (60......)
-
-        thread 0 (128......)
-                 (160......)
-        thread 1 (132......)
-                 (164......)
-    */
     #pragma omp parallel for
-    for(int i=0;i<8;i++){
-        for(int j=i*2;j<2*(i+1);j++){
-            int x = j/BLOCK_NUM;
-            int y = j%BLOCK_NUM;
-            
-            auto outxy = mat_block2(x,y,out,n,s,BLOCK_NUM);
+    for(int i=0;i<BLOCK_NUM;i++){
+        for(int j=0;j<BLOCK_NUM;j++){
             for(int k=0;k<BLOCK_NUM;k++){
-                //out(x,y) += A(x,k)*B(k,y)
-                auto Axk = mat_block2(x,k,A,n,s,BLOCK_NUM);
-                auto Bky = mat_block2(k,y,B,n,s,BLOCK_NUM);
-                matfma_avx512_32x32(outxy,s,Axk,s,Bky,s);
+                auto outik = mat_block2(i,k,out,n,s,BLOCK_NUM);
+                auto Aij = mat_block2(i,j,A,n,s,BLOCK_NUM);
+                auto Bjk = mat_block2(j,k,B,n,s,BLOCK_NUM);
+                matfma_avx512_16x16(outik,s,Aij,s,Bjk,s);
             }
         }
     }
@@ -246,7 +220,7 @@ void matmul_avx512(float* out, const float* A,const float* B, int n, int s)
     // the chunks of B matrix can fit inside the L1 cache.
     const int BLOCK_SIZE_X = 16;  
     // This value can be set larger, but also consider the size of L1.
-    const int BLOCK_SIZE_Y = std::min(n/32,64);
+    const int BLOCK_SIZE_Y =  std::max(1,std::min(n/32,64));
 
     mat_clear(out,n,s);    
 
@@ -272,7 +246,7 @@ void matmul_avx512(float* out, const float* A,const float* B, int n, int s)
 
 void matmul_strassen_(float* out, const float* A,const float* B, int n, int s,float* buffer)
 {
-    const int MIN_SIZE = 128;
+    const int MIN_SIZE = 1024;
 #if AVX512F_CHECK
     auto matadd = matadd_avx512;
     auto matsub = matsub_avx512;
@@ -286,7 +260,6 @@ void matmul_strassen_(float* out, const float* A,const float* B, int n, int s,fl
     if(n<=MIN_SIZE){
         return matmul(out,A,B,n,s);
     }
-
     mat_clear(out,n,s);
     /*
         A = a b
@@ -405,10 +378,10 @@ void benchmark_fun(void(func)(float*, const float*,const float*, int, int),int c
 
 #define BENCHMARK_FUNCTION(func,cnt) benchmark_fun(func,(cnt),#func)
 
-#define TEST_INNIT(N)\
-    const int SIZE = N;\
+#define TEST_INIT(s)\
+    int SIZE = s;\
     std::vector<BufferPtr> buffers;\
-    auto alloctor = [&buffers]()->float*{\
+    auto alloctor = [&buffers,SIZE]()->float*{\
         buffers.push_back(make_buffer(SIZE,SIZE));\
         return buffers.back().get();\
     };\
@@ -418,17 +391,17 @@ void benchmark_fun(void(func)(float*, const float*,const float*, int, int),int c
     auto C2= alloctor();\
     mat_init(A,SIZE);\
     mat_init(B,SIZE);\
-    matmul_base(C1,A,B,SIZE,SIZE);;
-
+    matmul_base(C1,A,B,SIZE,SIZE)
+    
 #define CHECK_FUN(fun)\
     mat_clear(C2,SIZE,SIZE);\
     printf("check "#fun"\n");\
     fun(C2,A,B,SIZE,SIZE);\
     mat_compare(C1,C2,SIZE,SIZE)
 
-void check_0()
+void check_16()
 {
-    TEST_INNIT(16);
+    TEST_INIT(16);
 
     auto matfma_avx512_16x16_ = [](float* out, const float* A,const float* B, int n, int s){
         matfma_avx512_16x16(out,s,A,s,B,s);
@@ -440,29 +413,26 @@ void check_0()
     }; 
     CHECK_FUN(matmul_avx512_16x16_); 
 }
-void check_1()
+void check_32()
 {
-    TEST_INNIT(32);
+    TEST_INIT(32);
 
     auto matfma_avx512_32x32_ = [](float* out, const float* A,const float* B, int n, int s){
         matfma_avx512_32x32(out,s,A,s,B,s);
     };
     CHECK_FUN(matfma_avx512_32x32_);     
 }
-void check_2()
+void check_n(int n)
 {
-    TEST_INNIT(128);
+    printf("check %dx%d ...\n",n,n);
 
-    CHECK_FUN(matmul_avx512_128x128);  
-}
-void check_3()
-{
-    TEST_INNIT(1024);
+    TEST_INIT(n);
 
     CHECK_FUN(matmul_cache_friendly);
 
 #if AVX512F_CHECK
     CHECK_FUN(matmul_avx512);
+    CHECK_FUN(matmul_avx512_block);
 #endif
 
     CHECK_FUN(matmul_strassen);
@@ -470,10 +440,11 @@ void check_3()
 
 void check_correct()
 {
-    check_0();
-    check_1();
-    check_2();
-    check_3();
+    check_16();
+    check_32();
+    
+    for(int n=32;n<=1024;n*=2)
+        check_n(n);;
 }
 int main(int argc,char* argv[])
 {
@@ -497,6 +468,7 @@ int main(int argc,char* argv[])
 #if AVX512F_CHECK
     BENCHMARK_FUNCTION(matadd_avx512,ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matsub_avx512,ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matmul_avx512_block,MUL_LOOP_CNT);
     BENCHMARK_FUNCTION(matmul_avx512,MUL_LOOP_CNT);
 #endif
 
