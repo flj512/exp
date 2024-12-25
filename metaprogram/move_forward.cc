@@ -174,7 +174,8 @@ void func(int& x) {
 class A {
 public:
     A(std::string& tag, std::string value, std::string&& desc):
-    tag_(tag),value_(value),desc_(std::move(desc))
+    // std::move(desc) here is needed, because desc is now lvalue, see `Passing L/R value reference` section.
+    tag_(tag),value_(value),desc_(std::move(desc)) 
     {
 
     }
@@ -189,6 +190,7 @@ template<typename T>
 class Wrapper{
 public:
     template<typename... Args>
+    // should use 'Args&&' to enable perfect forward.
     Wrapper(Args&&... args):
     t_(std::forward<Args>(args)...)
     {
