@@ -1,4 +1,4 @@
 #pragma once
-#include<cstdint>
+#include <cstdint>
 
 int64_t get_current_time_us();

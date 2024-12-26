@@ -1,37 +1,35 @@
-#include<iostream>
-
+#include <iostream>
+#include <vector>
 /*
 Left Value:
-An lvalue (short for locator value) represents an object that has a location in memory. 
+An lvalue (short for locator value) represents an object that has a location in memory.
 In other words, an lvalue refers to an object that can appear on the left-hand side of an assignment.
 
 Right Value:
-An rvalue (short for read value) represents a temporary object or value that does not have a specific location in memory. 
+An rvalue (short for read value) represents a temporary object or value that does not have a specific location in memory.
 An rvalue can only appear on the right-hand side of an assignment (hence the name "rvalue").
 */
 
 // L/R value reference
-void lr_value_reference() 
+void lr_value_reference()
 {
     int a = 1;
-    int& b=a;
+    int &b = a;
     // int& c = 10; //Error: non-const lvalue reference can't bind to rvalue.
-    const int& c =2; // const lvalue reference can bind to rvalue.
+    const int &c = 2; // const lvalue reference can bind to rvalue.
 
-    int&& d = 3;
-    //int&& e = a; //Error: rvalue reference can't bind to lvalue.
+    int &&d = 3;
+    // int&& e = a; //Error: rvalue reference can't bind to lvalue.
 }
 
 // Passing L/R value reference
-void func1(int& a)
+void func1(int &a)
 {
-
 }
-void func2(int&& a)
+void func2(int &&a)
 {
-
 }
-void lr_value_reference_pass(int& a, int&& b)
+void lr_value_reference_pass(int &a, int &&b)
 {
     // the L/R value reference itself is treated as an lvalue
     // this means a,b is int type from the logic aspect.
@@ -43,14 +41,14 @@ void lr_value_reference_pass(int& a, int&& b)
 
     // create another two l value refence to a/b.
     // this is ok because a/b is int type.
-    int& l1 = a;
-    int& l2 = b;
+    int &l1 = a;
+    int &l2 = b;
 
     // both the following expression is error
     // because r value reference can only bind to rvalue, but
     // a/b is is int type and is lvalue.
-    //int&& r1 = a;
-    //int&& r2 = b;
+    // int&& r1 = a;
+    // int&& r2 = b;
 
     // call func1 is OK.
     func1(a);
@@ -82,21 +80,25 @@ void lr_value_reference_pass(int& a, int&& b)
 
 // Universal Reference
 /*
-A Universal Reference (also known as a Forwarding Reference) is a reference that can bind to both lvalues and rvalues, 
+A Universal Reference (also known as a Forwarding Reference) is a reference that can bind to both lvalues and rvalues,
 depending on the type of the argument passed to the function.
 
-Universal references are typically written as T&& in function templates, 
-but the key distinction here is how they behave differently from regular rvalue references. 
+Universal references are typically written as T&& in function templates,
+but the key distinction here is how they behave differently from regular rvalue references.
 The behavior is determined at compile-time by the type of the argument passed to the function.
 */
 
-//Example:
+// Example:
 template <typename T>
-void func(T&& arg) {
+void func(T &&arg)
+{
     // Determine whether we have an lvalue or rvalue
-    if constexpr (std::is_lvalue_reference<T&&>::value) {
+    if constexpr (std::is_lvalue_reference<T &&>::value)
+    {
         std::cout << "Lvalue\n";
-    } else {
+    }
+    else
+    {
         std::cout << "Rvalue\n";
     }
 }
@@ -115,7 +117,7 @@ When func(20) is called and 20 is an rvalue.
 ->The function prints "Rvalue reference" because T&& is treated as an rvalue reference.
 
 The Reference Collapsing Rule:
-C++ has a reference collapsing rule that defines how references to references behave in template deduction. 
+C++ has a reference collapsing rule that defines how references to references behave in template deduction.
 Specifically:
 
 T& & collapses to T&.
@@ -127,11 +129,10 @@ The last rule is particularly important because it allows universal references t
 or rvalue references depending on the type of argument passed.
 */
 
-
 // Perfect Forward
 /*
-The std::forward function primarily used in perfect forwarding. 
-It allows you to forward arguments to another function while maintaining their value category (whether they are lvalues or rvalues). 
+The std::forward function primarily used in perfect forwarding.
+It allows you to forward arguments to another function while maintaining their value category (whether they are lvalues or rvalues).
 
     // Here’s a simplified version of the std::forward implementation found in the C++ Standard Library.
 
@@ -145,69 +146,111 @@ It allows you to forward arguments to another function while maintaining their v
         T&& forward(typename remove_reference<T>::type&& arg) noexcept {
             return static_cast<T&&>(arg);
         }
-    } 
+    }
 */
 
 // Forwarding function Example.
 template <typename T>
-void wrapper(T&& arg) {
+void wrapper(T &&arg)
+{
     // Forward the argument to another function, preserving its value category
     func(std::forward<T>(arg));
 }
 
 // A function that takes an rvalue reference
-void func(int&& x) {
+void func(int &&x)
+{
     std::cout << "Rvalue func: " << x << "\n";
 }
 
 // A function that takes an lvalue reference
-void func(int& x) {
+void func(int &x)
+{
     std::cout << "Lvalue func: " << x << "\n";
 }
 
-
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 
-// A full example show how to init an wrap class and forwad parameter.
+// A full example to show how to perfect forwad parameters.
 
-class A {
+class A
+{
 public:
-    A(std::string& tag, std::string value, std::string&& desc):
     // std::move(desc) here is needed, because desc is now lvalue, see `Passing L/R value reference` section.
-    tag_(tag),value_(value),desc_(std::move(desc)) 
+    // otherwise, init desc_ will call the copy function of string.
+    A(std::string &key, std::string value, std::string &&desc) : key_(key), value_(value), desc_(std::move(desc))
     {
+    }
 
+    void print()
+    {
+        std::cout << "------ A ------" << std::endl;
+        std::cout << "tag:" << key_ << std::endl;
+        std::cout << "value:" << value_ << std::endl;
+        std::cout << "desc:" << desc_ << std::endl;
     }
 
 private:
-    std::string tag_;
+    std::string key_;
     std::string value_;
     std::string desc_;
 };
 
-template<typename T>
-class Wrapper{
+template <typename T>
+class Cache
+{
 public:
-    template<typename... Args>
-    // should use 'Args&&' to enable perfect forward.
-    Wrapper(Args&&... args):
-    t_(std::forward<Args>(args)...)
+    ~Cache()
     {
+        for (auto &p : buffer_)
+        {
+            operator delete(p); // only free memory without calling destructor
+        }
+    }
+    template <typename... Args>
+    // should use 'Args&&' to enable perfect forward.
+    T *create(Args &&...args)
+    {
+        void *buff;
+        if (buffer_.empty())
+        {
+            std::cout << "\n\tno cache, create a new one." << std::endl;
+            buff = operator new(sizeof(T)); // only alloc memory without calling constructor
+        }
+        else
+        {
+            std::cout << "\n\tget from cache." << std::endl;
+            buff = *buffer_.rbegin();
+            buffer_.pop_back();
+        }
+        return new (buff) T(std::forward<Args>(args)...); // only call the T's constructor on `buff`
+    }
 
+    void destory(T *t)
+    {
+        t->~T();
+        buffer_.push_back(t);
     }
 
 private:
-    T t_;
+    std::vector<void *> buffer_;
 };
-int main() {
-    std::string tag = "tag";
-    std::string value ="5";
+int main()
+{
+    std::string key = "num";
+    std::string value = "5";
     std::string desc = "this is test program";
 
-    Wrapper<A> w(tag,value,std::move(desc));
+    Cache<A> cache;
 
-    std::cout<<"tag:"<<tag<<std::endl;
-    std::cout<<"value:"<<value<<std::endl;
-    std::cout<<"desc:"<<desc<<std::endl;
+    auto a = cache.create(key, value, std::move(desc));
+    a->print();
+    cache.destory(a);
+
+    a = cache.create(key, value, std::move(desc));
+    a->print();
+    cache.destory(a);
+
+    return 0;
 }
