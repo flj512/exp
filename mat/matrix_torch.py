@@ -23,3 +23,4 @@ mat_benchmark(lambda a,b: a.matmul(b),int(loop_cnt),"mul")
 ADD_CNT = 400
 loop_cnt = int(max(1,ADD_CNT//(N_1024*N_1024)))
 mat_benchmark(lambda a,b: a+b,loop_cnt,"add")
+mat_benchmark(lambda a,b: a-b,loop_cnt,"sub")

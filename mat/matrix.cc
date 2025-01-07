@@ -11,6 +11,9 @@
 #if AVX512F_CHECK
 #include <immintrin.h>
 #endif
+#ifdef HAVE_OPENBLAS
+#include <cblas.h>
+#endif
 
 #define N (1024) // only test NxN matrix, N is multiple of 16
 
@@ -83,6 +86,26 @@ void matsub_base(float *out, const float *A, const float *B, int n, int s)
         for (int j = 0; j < n; j++)
             out[i * s + j] = A[i * s + j] - B[i * s + j];
 }
+
+#ifdef HAVE_OPENBLAS
+void matadd_openblas(float *out, const float *A, const float *B, int n, int s)
+{
+    cblas_saxpy(n * n, 1.0f, A, 1, out, 1);
+    cblas_saxpy(n * n, 1.0f, B, 1, out, 1);
+}
+void matmul_openblas(float *out, const float *A, const float *B, int n, int s)
+{
+    float alpha = 1.0f;
+    float beta = 0.0f;
+    cblas_sgemm(CblasRowMajor, // Row-major layout
+                CblasNoTrans,  // A is not transposed
+                CblasNoTrans,  // B is not transposed
+                n, n, n,       // Matrix dimensions: n x n
+                alpha, A, n,   // Matrix A, with leading dimension N
+                B, n,          // Matrix B, with leading dimension N
+                beta, out, n); // Matrix out (result), with leading dimension N
+}
+#endif
 
 void matmul_cache_friendly(float *out, const float *A, const float *B, int n, int s)
 {
@@ -375,7 +398,7 @@ void mat_compare(const float *A, const float *B, int n, int s)
         }
 }
 
-void benchmark_fun(void(func)(float *, const float *, const float *, int, int), int cnt, const char *tag)
+void benchmark_fun(void(func)(float *, const float *, const float *, int, int), int cnt, const char *tag, int loop)
 {
     std::vector<BufferPtr> A, B, C;
     for (int i = 0; i < cnt; i++)
@@ -388,12 +411,14 @@ void benchmark_fun(void(func)(float *, const float *, const float *, int, int), 
     }
 
     auto start = get_current_time_us();
-    for (int i = 0; i < cnt; i++)
-        func(C[i].get(), A[i].get(), B[i].get(), N, N);
-    printf("%s = %0.4f ms, %d times\n", tag, (get_current_time_us() - start) / 1000.0f / cnt, cnt);
+    for (int l = 0; l < loop; l++)
+        for (int i = 0; i < cnt; i++)
+            func(C[i].get(), A[i].get(), B[i].get(), N, N);
+    printf("%s = %0.4f ms, %d times\n", tag, (get_current_time_us() - start) / 1000.0f / (cnt * loop), cnt * loop);
 }
 
-#define BENCHMARK_FUNCTION(func, cnt) benchmark_fun(func, (cnt), #func)
+#define BENCHMARK_FUNCTION(func, cnt) benchmark_fun(func, (cnt), #func, 1)
+#define BENCHMARK_FUNCTION_LOOP(func, cnt, loop) benchmark_fun(func, (cnt), #func, (loop))
 
 #define TEST_INIT(s)                                \
     int SIZE = s;                                   \
@@ -454,7 +479,9 @@ void check_n(int n)
     CHECK_FUN(matmul_avx512);
     CHECK_FUN(matmul_avx512_block);
 #endif
-
+#ifdef HAVE_OPENBLAS
+    CHECK_FUN(matmul_openblas);
+#endif
     CHECK_FUN(matmul_strassen);
 }
 
@@ -486,6 +513,10 @@ int main(int argc, char *argv[])
     BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
     BENCHMARK_FUNCTION(matadd_base, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matsub_base, ADD_LOOP_CNT);
+#ifdef HAVE_OPENBLAS
+    BENCHMARK_FUNCTION(matadd_openblas, ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matmul_openblas, MUL_LOOP_CNT);
+#endif
 
 #if AVX512F_CHECK
     BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
