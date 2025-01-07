@@ -169,40 +169,68 @@ inline T *mat_block2(int x, int y, T *m, int n, int s, int B)
 }
 
 #if AVX512F_CHECK
-void matadd_avx512(float *out, const float *A, const float *B, int n, int s)
+enum class MatOp
 {
-    const int AVX_FLOAT_SIZE = 16;
-
-#pragma omp parallel for num_threads(ADD_OMP_THREADS)
+    ADD,
+    SUB
+};
+void matX_avx512(float *out, const float *A, const float *B, int n, int s, MatOp op)
+{
+#pragma omp parallel for num_threads(2)
     for (int i = 0; i < n; i++)
     {
         bind_cpu();
-        for (int j = 0; j < n; j += AVX_FLOAT_SIZE)
+        __m512 *outm = (__m512 *)&out[i * s];
+        const __m512 *Am = (const __m512 *)&A[i * s];
+        const __m512 *Bm = (const __m512 *)&B[i * s];
+
+        for (int j = 0; j < n; j += 64)
         {
-            __m512 a = _mm512_load_ps(&A[i * s + j]);
-            __m512 b = _mm512_load_ps(&B[i * s + j]);
-            __m512 o = _mm512_add_ps(a, b);
-            _mm512_store_ps(&out[i * s + j], o);
+            __m512 a0 = _mm512_load_ps(Am + 0);
+            __m512 a1 = _mm512_load_ps(Am + 1);
+            __m512 a2 = _mm512_load_ps(Am + 2);
+            __m512 a3 = _mm512_load_ps(Am + 3);
+            __m512 b0 = _mm512_load_ps(Bm + 0);
+            __m512 b1 = _mm512_load_ps(Bm + 1);
+            __m512 b2 = _mm512_load_ps(Bm + 2);
+            __m512 b3 = _mm512_load_ps(Bm + 3);
+            Am += 4;
+            Bm += 4;
+
+            __m512 o0, o1, o2, o3;
+            if (op == MatOp::ADD)
+            {
+                o0 = _mm512_add_ps(a0, b0);
+                o1 = _mm512_add_ps(a1, b1);
+                o2 = _mm512_add_ps(a2, b2);
+                o3 = _mm512_add_ps(a3, b3);
+            }
+            else
+            {
+                o0 = _mm512_sub_ps(a0, b0);
+                o1 = _mm512_sub_ps(a1, b1);
+                o2 = _mm512_sub_ps(a2, b2);
+                o3 = _mm512_sub_ps(a3, b3);
+            }
+
+            _mm512_stream_ps((float *)(outm + 0), o0);
+            _mm512_stream_ps((float *)(outm + 1), o1);
+            _mm512_stream_ps((float *)(outm + 2), o2);
+            _mm512_stream_ps((float *)(outm + 3), o3);
+
+            outm += 4;
         }
     }
 }
 
+void matadd_avx512(float *out, const float *A, const float *B, int n, int s)
+{
+    matX_avx512(out, A, B, n, s, MatOp::ADD);
+}
+
 void matsub_avx512(float *out, const float *A, const float *B, int n, int s)
 {
-    const int AVX_FLOAT_SIZE = 16;
-
-#pragma omp parallel for num_threads(ADD_OMP_THREADS)
-    for (int i = 0; i < n; i++)
-    {
-        bind_cpu();
-        for (int j = 0; j < n; j += AVX_FLOAT_SIZE)
-        {
-            __m512 a = _mm512_load_ps(&A[i * s + j]);
-            __m512 b = _mm512_load_ps(&B[i * s + j]);
-            __m512 o = _mm512_sub_ps(a, b);
-            _mm512_store_ps(&out[i * s + j], o);
-        }
-    }
+    matX_avx512(out, A, B, n, s, MatOp::SUB);
 }
 
 // out += AxB
