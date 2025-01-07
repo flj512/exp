@@ -19,7 +19,7 @@ endif()
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512)
 if(COMPILER_SUPPORTS_AVX512)
-    message(STATUS "Compiler supports AVX512")
+    message(STATUS "Compiler supports AVX512f")
     target_compile_options(matrix PRIVATE -mavx512f)
 endif()
 
