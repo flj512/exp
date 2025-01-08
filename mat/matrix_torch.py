@@ -31,6 +31,16 @@ import time
 # torch cpu add 0.546 ms, 400 times
 # torch cpu sub 0.308 ms, 400 times
 
+# 2048x2048 matrix benchmark
+# torch cpu mul 40.594 ms, 12 times
+# torch cpu add 2.326 ms, 100 times
+# torch cpu sub 2.187 ms, 100 times
+
+# 4096x4096 matrix benchmark
+# torch cpu mul 273.356 ms, 1 times
+# torch cpu add 14.261 ms, 25 times
+# torch cpu sub 17.215 ms, 25 times
+
 N = 1024
 N_1024 = N/1024
 
