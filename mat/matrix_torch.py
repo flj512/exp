@@ -1,8 +1,37 @@
 import torch
 import time
 
-N = 1024
+# Test result on my laptop (8 core 16 threads), pytorch uses 8 threads by default
+# CPU: 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz
+# RAM: 16GB DDR4 3200MHz
+# OS: Ubuntu 20.04.2 LTS
+# Caches (sum of all):      
+#   L1d:                    384 KiB (8 instances)
+#   L1i:                    256 KiB (8 instances)
+#   L2:                     10 MiB (8 instances)
+#   L3:                     24 MiB (1 instance)
 
+# 128x128 matrix benchmark
+# torch cpu mul 0.015 ms, 6400 times
+# torch cpu add 0.013 ms, 25600 times
+# torch cpu sub 0.010 ms, 25600 times
+
+# 256x256 matrix benchmark
+# torch cpu mul 0.093 ms, 1600 times
+# torch cpu add 0.023 ms, 6400 times
+# torch cpu sub 0.024 ms, 6400 times
+
+# 512x512 matrix benchmark
+# torch cpu mul 0.686 ms, 400 times
+# torch cpu add 0.105 ms, 1600 times
+# torch cpu sub 0.070 ms, 1600 times
+
+# 1024x1024 matrix benchmark
+# torch cpu mul 5.666 ms, 100 times
+# torch cpu add 0.546 ms, 400 times
+# torch cpu sub 0.308 ms, 400 times
+
+N = 1024
 N_1024 = N/1024
 
 def mat_benchmark(op,cnt:int, tag:str)->None:

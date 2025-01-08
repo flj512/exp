@@ -17,7 +17,7 @@
 
 // only test NxN matrix, N is multiple of 16
 // the parameter 's' in the following functions is the stride of the matrix.
-#define N (1024) 
+#define N (1024)
 
 // create 64 byte aligned buffer.
 typedef std::shared_ptr<float> BufferPtr;
@@ -263,10 +263,10 @@ void matfma_avx512_16x16(__m512 out[16], const float *A, int sa, const float *B,
 // out = AxB
 void matmul_avx512_16x16(float *out, int so, const float *A, int sa, const float *B, int sb)
 {
-    __m512 o[16]={0};
+    __m512 o[16] = {0};
     matfma_avx512_16x16(o, A, sa, B, sb);
-    for(int i=0;i<16;i++)
-        _mm512_store_ps(&out[i*so],o[i]);
+    for (int i = 0; i < 16; i++)
+        _mm512_store_ps(&out[i * so], o[i]);
 }
 
 // out += AxB
@@ -276,10 +276,10 @@ void matfma_avx512_32x32(float *out, int so, const float *A, int sa, const float
         for (int j = 0; j < 2; j++)
         {
             __m512 o[16];
-            
+
             auto outij = mat_block(2 * i + j, out, 32, so);
-            for(int k=0;k<16;k++)
-                o[k]=_mm512_load_ps(&outij[k*so]);
+            for (int k = 0; k < 16; k++)
+                o[k] = _mm512_load_ps(&outij[k * so]);
 
             // A(i,0)*B(0,j)
             auto a0 = mat_block(2 * i, A, 32, sa);
@@ -291,18 +291,79 @@ void matfma_avx512_32x32(float *out, int so, const float *A, int sa, const float
             auto b1 = mat_block(2 + j, B, 32, sb);
             matfma_avx512_16x16(o, a1, sa, b1, sb);
 
-            for(int k=0;k<16;k++)
-                _mm512_store_ps(&outij[k*so],o[k]);
+            for (int k = 0; k < 16; k++)
+                _mm512_store_ps(&outij[k * so], o[k]);
         }
+}
+
+// fast if n <= 512
+void matmul_avx512_block_tiny(float *out, const float *A, const float *B, int n, int s)
+{
+    int BLOCK_NUM = n / 16;
+
+#pragma omp parallel for
+    for (int i = 0; i < BLOCK_NUM; i++)
+    {
+        bind_cpu();
+        for (int j = 0; j < BLOCK_NUM; j++)
+        {
+            __m512 o[16] = {0};
+            auto outij = mat_block2(i, j, out, n, s, BLOCK_NUM);
+
+            for (int k = 0; k < BLOCK_NUM; k++)
+            {
+                auto Aik = mat_block2(i, k, A, n, s, BLOCK_NUM);
+                auto Bkj = mat_block2(k, j, B, n, s, BLOCK_NUM);
+                matfma_avx512_16x16(o, Aik, s, Bkj, s);
+            }
+
+            for (int k = 0; k < 16; k++)
+                _mm512_store_ps(&outij[k * s], o[k]);
+        }
+    }
+}
+
+void matmfa_avx512_block_tiny(float *out, const float *A, const float *B, int n, int s)
+{
+    int BLOCK_NUM = n / 16;
+
+#pragma omp parallel for
+    for (int i = 0; i < BLOCK_NUM; i++)
+    {
+        bind_cpu();
+        for (int j = 0; j < BLOCK_NUM; j++)
+        {
+            __m512 o[16];
+
+            auto outij = mat_block2(i, j, out, n, s, BLOCK_NUM);
+            for (int k = 0; k < 16; k++)
+                o[k] = _mm512_load_ps(&outij[k * s]);
+
+            for (int k = 0; k < BLOCK_NUM; k++)
+            {
+                auto Aik = mat_block2(i, k, A, n, s, BLOCK_NUM);
+                auto Bkj = mat_block2(k, j, B, n, s, BLOCK_NUM);
+                matfma_avx512_16x16(o, Aik, s, Bkj, s);
+            }
+
+            for (int k = 0; k < 16; k++)
+                _mm512_store_ps(&outij[k * s], o[k]);
+        }
+    }
 }
 
 void matmul_avx512_block(float *out, const float *A, const float *B, int n, int s)
 {
-    int BLOCK_NUM = n / 32;
+    const int BLOCK_SIZE = 512;
+    if (n <= BLOCK_SIZE)
+    {
+        return matmul_avx512_block_tiny(out, A, B, n, s);
+    }
+
+    int BLOCK_NUM = n / BLOCK_SIZE;
 
     mat_clear(out, n, s);
 
-#pragma omp parallel for
     for (int i = 0; i < BLOCK_NUM; i++)
     {
         for (int j = 0; j < BLOCK_NUM; j++)
@@ -312,7 +373,7 @@ void matmul_avx512_block(float *out, const float *A, const float *B, int n, int 
                 auto outik = mat_block2(i, k, out, n, s, BLOCK_NUM);
                 auto Aij = mat_block2(i, j, A, n, s, BLOCK_NUM);
                 auto Bjk = mat_block2(j, k, B, n, s, BLOCK_NUM);
-                matfma_avx512_32x32(outik, s, Aij, s, Bjk, s);
+                matmfa_avx512_block_tiny(outik, Aij, Bjk, BLOCK_SIZE, s);
             }
         }
     }
@@ -337,6 +398,7 @@ void matmul_avx512(float *out, const float *A, const float *B, int n, int s)
 #pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < n; i += BLOCK_SIZE_Y)
     {
+        bind_cpu();
         for (int j = 0; j < n; j += BLOCK_SIZE_X)
         {
             for (int k = 0; k < n; k += AVX_FLOAT_SIZE)
@@ -585,6 +647,7 @@ void check_n(int n)
 #if AVX512F_CHECK
     CHECK_FUN(matmul_avx512);
     CHECK_FUN(matmul_avx512_block);
+    CHECK_FUN(matmul_avx512_block_tiny);
 #endif
 #ifdef HAVE_OPENBLAS
     CHECK_FUN(matmul_openblas);
@@ -631,6 +694,7 @@ int main(int argc, char *argv[])
     BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matsub_avx512, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matmul_avx512_block, MUL_LOOP_CNT);
+    BENCHMARK_FUNCTION(matmul_avx512_block_tiny, MUL_LOOP_CNT);
     BENCHMARK_FUNCTION(matmul_avx512, MUL_LOOP_CNT);
 #endif
 
