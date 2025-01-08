@@ -61,35 +61,6 @@ void mat_copy(float *d, int sd, float *s, int ss, int n)
         mempcpy(&d[i * sd], &s[i * ss], n * sizeof(float));
 }
 
-void avx_copy(void *d, void *s, size_t n)
-{
-    __m512i *dst = (__m512i *)d;
-    const __m512i *src = (const __m512i *)s;
-
-    for (; n > 0; n -= 512)
-    {
-        __m512i s0 = _mm512_load_si512(src + 0);
-        __m512i s1 = _mm512_load_si512(src + 1);
-        __m512i s2 = _mm512_load_si512(src + 2);
-        __m512i s3 = _mm512_load_si512(src + 3);
-        __m512i s4 = _mm512_load_si512(src + 4);
-        __m512i s5 = _mm512_load_si512(src + 5);
-        __m512i s6 = _mm512_load_si512(src + 6);
-        __m512i s7 = _mm512_load_si512(src + 7);
-        src += 8;
-
-        _mm512_stream_si512(dst + 0, s0);
-        _mm512_stream_si512(dst + 1, s1);
-        _mm512_stream_si512(dst + 2, s2);
-        _mm512_stream_si512(dst + 3, s3);
-        _mm512_stream_si512(dst + 4, s4);
-        _mm512_stream_si512(dst + 5, s5);
-        _mm512_stream_si512(dst + 6, s6);
-        _mm512_stream_si512(dst + 7, s7);
-        dst += 8;
-    }
-}
-
 void matmul_base(float *out, const float *A, const float *B, int n, int s)
 {
     mat_clear(out, n, s);
@@ -169,11 +140,51 @@ inline T *mat_block2(int x, int y, T *m, int n, int s, int B)
 }
 
 #if AVX512F_CHECK
+
+void avx_copy(void *d, void *s, size_t n)
+{
+    __m512i *dst = (__m512i *)d;
+    const __m512i *src = (const __m512i *)s;
+
+    for (; n > 0; n -= 512)
+    {
+        __m512i s0 = _mm512_load_si512(src + 0);
+        __m512i s1 = _mm512_load_si512(src + 1);
+        __m512i s2 = _mm512_load_si512(src + 2);
+        __m512i s3 = _mm512_load_si512(src + 3);
+        __m512i s4 = _mm512_load_si512(src + 4);
+        __m512i s5 = _mm512_load_si512(src + 5);
+        __m512i s6 = _mm512_load_si512(src + 6);
+        __m512i s7 = _mm512_load_si512(src + 7);
+        src += 8;
+        // use stream to avoid cache pollution
+        // stream api writes data to memory directly without writing to the cache first.
+        _mm512_stream_si512(dst + 0, s0);
+        _mm512_stream_si512(dst + 1, s1);
+        _mm512_stream_si512(dst + 2, s2);
+        _mm512_stream_si512(dst + 3, s3);
+        _mm512_stream_si512(dst + 4, s4);
+        _mm512_stream_si512(dst + 5, s5);
+        _mm512_stream_si512(dst + 6, s6);
+        _mm512_stream_si512(dst + 7, s7);
+        // _mm512_store_si512(dst + 0, s0);
+        // _mm512_store_si512(dst + 1, s1);
+        // _mm512_store_si512(dst + 2, s2);
+        // _mm512_store_si512(dst + 3, s3);
+        // _mm512_store_si512(dst + 4, s4);
+        // _mm512_store_si512(dst + 5, s5);
+        // _mm512_store_si512(dst + 6, s6);
+        // _mm512_store_si512(dst + 7, s7);
+        dst += 8;
+    }
+}
+
 enum class MatOp
 {
     ADD,
     SUB
 };
+
 void matX_avx512(float *out, const float *A, const float *B, int n, int s, MatOp op)
 {
 #pragma omp parallel for num_threads(2)
@@ -505,11 +516,13 @@ void benchmark_mem()
             memcpy(B[i].get(), A[i].get(), matSize);
     printf("memcpy speed = %0.4f GB/s, total Copied %0.1f GB\n", nTotalGB * 1000000 / (get_current_time_us() - start), nTotalGB);
 
+#if AVX512F_CHECK
     start = get_current_time_us();
     for (int n = 0; n < nIter; n++)
         for (int i = 0; i < nLoop; i++)
             avx_copy(B[i].get(), A[i].get(), matSize);
     printf("avxcpy speed = %0.4f GB/s, total Copied %0.1f GB\n", nTotalGB * 1000000 / (get_current_time_us() - start), nTotalGB);
+#endif
 }
 
 #define BENCHMARK_FUNCTION(func, cnt) benchmark_fun(func, (cnt), #func, 1)
