@@ -15,8 +15,11 @@
 #include <cblas.h>
 #endif
 
-#define N (1024) // only test NxN matrix, N is multiple of 16
+// only test NxN matrix, N is multiple of 16
+// the parameter 's' in the following functions is the stride of the matrix.
+#define N (1024) 
 
+// create 64 byte aligned buffer.
 typedef std::shared_ptr<float> BufferPtr;
 BufferPtr make_buffer(int n = N, int s = N)
 {
@@ -245,34 +248,25 @@ void matsub_avx512(float *out, const float *A, const float *B, int n, int s)
 }
 
 // out += AxB
-void matfma_avx512_16x16(float *out, int so, const float *A, int sa, const float *B, int sb)
+void matfma_avx512_16x16(__m512 out[16], const float *A, int sa, const float *B, int sb)
 {
     for (int i = 0; i < 16; i++)
     {
-        __m512 o = _mm512_load_ps(&out[i * so]);
         for (int j = 0; j < 16; j++)
         {
             __m512 a = _mm512_set1_ps(A[i * sa + j]);
             __m512 b = _mm512_load_ps(&B[j * sb]);
-            o = _mm512_fmadd_ps(a, b, o);
+            out[i] = _mm512_fmadd_ps(a, b, out[i]);
         }
-        _mm512_store_ps(&out[i * so], o);
     }
 }
 // out = AxB
 void matmul_avx512_16x16(float *out, int so, const float *A, int sa, const float *B, int sb)
 {
-    for (int i = 0; i < 16; i++)
-    {
-        __m512 o = _mm512_set1_ps(0.0f);
-        for (int j = 0; j < 16; j++)
-        {
-            __m512 a = _mm512_set1_ps(A[i * sa + j]);
-            __m512 b = _mm512_load_ps(&B[j * sb]);
-            o = _mm512_fmadd_ps(a, b, o);
-        }
-        _mm512_store_ps(&out[i * so], o);
-    }
+    __m512 o[16]={0};
+    matfma_avx512_16x16(o, A, sa, B, sb);
+    for(int i=0;i<16;i++)
+        _mm512_store_ps(&out[i*so],o[i]);
 }
 
 // out += AxB
@@ -281,22 +275,30 @@ void matfma_avx512_32x32(float *out, int so, const float *A, int sa, const float
     for (int i = 0; i < 2; i++)
         for (int j = 0; j < 2; j++)
         {
+            __m512 o[16];
+            
             auto outij = mat_block(2 * i + j, out, 32, so);
+            for(int k=0;k<16;k++)
+                o[k]=_mm512_load_ps(&outij[k*so]);
+
             // A(i,0)*B(0,j)
             auto a0 = mat_block(2 * i, A, 32, sa);
             auto b0 = mat_block(j, B, 32, sb);
-            matfma_avx512_16x16(outij, so, a0, sa, b0, sb);
+            matfma_avx512_16x16(o, a0, sa, b0, sb);
 
             // A(i,1)*B(1,j)
             auto a1 = mat_block(2 * i + 1, A, 32, sa);
             auto b1 = mat_block(2 + j, B, 32, sb);
-            matfma_avx512_16x16(outij, so, a1, sa, b1, sb);
+            matfma_avx512_16x16(o, a1, sa, b1, sb);
+
+            for(int k=0;k<16;k++)
+                _mm512_store_ps(&outij[k*so],o[k]);
         }
 }
 
 void matmul_avx512_block(float *out, const float *A, const float *B, int n, int s)
 {
-    int BLOCK_NUM = n / 16;
+    int BLOCK_NUM = n / 32;
 
     mat_clear(out, n, s);
 
@@ -310,7 +312,7 @@ void matmul_avx512_block(float *out, const float *A, const float *B, int n, int 
                 auto outik = mat_block2(i, k, out, n, s, BLOCK_NUM);
                 auto Aij = mat_block2(i, j, A, n, s, BLOCK_NUM);
                 auto Bjk = mat_block2(j, k, B, n, s, BLOCK_NUM);
-                matfma_avx512_16x16(outik, s, Aij, s, Bjk, s);
+                matfma_avx512_32x32(outik, s, Aij, s, Bjk, s);
             }
         }
     }
@@ -362,7 +364,7 @@ void matmul_strassen_(float *out, const float *A, const float *B, int n, int s, 
 #if AVX512F_CHECK
     auto matadd = matadd_avx512;
     auto matsub = matsub_avx512;
-    auto matmul = matmul_avx512;
+    auto matmul = matmul_avx512_block;
 #else
     auto matadd = matadd_base;
     auto matsub = matsub_base;
@@ -553,12 +555,6 @@ void benchmark_mem()
 void check_16()
 {
     TEST_INIT(16);
-
-    auto matfma_avx512_16x16_ = [](float *out, const float *A, const float *B, int n, int s)
-    {
-        matfma_avx512_16x16(out, s, A, s, B, s);
-    };
-    CHECK_FUN(matfma_avx512_16x16_);
 
     auto matmul_avx512_16x16_ = [](float *out, const float *A, const float *B, int n, int s)
     {
