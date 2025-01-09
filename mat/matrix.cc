@@ -427,7 +427,8 @@ void matmul_avx512_block(float *out, const float *A, const float *B, int n,
 
     So parallel on the total dataset is not always the best solution.
 */
-void matmul_avx512(float *out, const float *A, const float *B, int n, int s) {
+void matmul_avx512_entire(float *out, const float *A, const float *B, int n,
+                          int s) {
   /*
       the trunk shape of A matrix is (BLOCK_Y, BLOCK_X)
       the trunk shape of B matrix is (BLOCK_X, AVX_FLOAT_SIZE)
@@ -629,7 +630,7 @@ void benchmark_mem() {
   auto start = get_current_time_us();
   for (int n = 0; n < nIter; n++)
     for (int i = 0; i < nLoop; i++) memcpy(B[i].get(), A[i].get(), matSize);
-  printf("memcpy speed = %0.4f GB/s, total Copied %0.1f GB\n",
+  printf("\nmemcpy speed = %0.4f GB/s, total Copied %0.1f GB\n",
          nTotalGB * 1000000 / (get_current_time_us() - start), nTotalGB);
 
 #if AVX512F_CHECK
@@ -704,7 +705,7 @@ void check_n(int n) {
 
 #if AVX512F_CHECK
   if (n <= 1024) {
-    CHECK_FUN(matmul_avx512);
+    CHECK_FUN(matmul_avx512_entire);
   }
   CHECK_FUN(matmul_avx512_block);
   CHECK_FUN(matmul_avx512_block_tiny);
@@ -751,26 +752,32 @@ int main(int argc, char *argv[]) {
 
   printf("\n------ %dx%d matrix benchmark ------\n", N, N);
 
+  BENCHMARK_FUNCTION(matsub_naive, ADD_LOOP_CNT);
+  BENCHMARK_FUNCTION(matadd_naive, ADD_LOOP_CNT);
+#ifdef HAVE_OPENBLAS
+  BENCHMARK_FUNCTION(matadd_openblas, ADD_LOOP_CNT);
+#endif
+#if AVX512F_CHECK
+  BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
+  BENCHMARK_FUNCTION(matsub_avx512, ADD_LOOP_CNT);
+#endif
+  printf("\n");
   if (N_1024 <= 1) {
     BENCHMARK_FUNCTION(matmul_naive, 1);
   }
 
   if (N <= 1024) BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
-  BENCHMARK_FUNCTION(matsub_naive, ADD_LOOP_CNT);
-  BENCHMARK_FUNCTION(matadd_naive, ADD_LOOP_CNT);
+
 #ifdef HAVE_OPENBLAS
-  BENCHMARK_FUNCTION(matadd_openblas, ADD_LOOP_CNT);
   BENCHMARK_FUNCTION(matmul_openblas, MUL_LOOP_CNT);
 #endif
   BENCHMARK_FUNCTION(matmul_strassen, MUL_LOOP_CNT);
 #if AVX512F_CHECK
-  BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
-  BENCHMARK_FUNCTION(matsub_avx512, ADD_LOOP_CNT);
   BENCHMARK_FUNCTION(matmul_avx512_block, MUL_LOOP_CNT);
   if (N <= 1024) BENCHMARK_FUNCTION(matmul_avx512_block_tiny, MUL_LOOP_CNT);
-  if (N <= 4096) BENCHMARK_FUNCTION(matmul_avx512, MUL_LOOP_CNT);
+  if (N <= 4096) BENCHMARK_FUNCTION(matmul_avx512_entire, MUL_LOOP_CNT);
 #endif
 
-  // benchmark_mem();
+  benchmark_mem();
   return 0;
 }
