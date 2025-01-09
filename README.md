@@ -8,7 +8,7 @@ Simple C++ code used to experiment with the following features
 | Feature    | Subdir    |
 |:-----------:|:-----------:|
 | Cache Line Friendly  | mat | 
-| L1/L2 Cache  | mat  | 
+| L1/L2/L3 Cache  | mat  | 
 | OpenMP | mat |
 | AVX2 | mat |
 | Prefetch | mat |
