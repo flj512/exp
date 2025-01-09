@@ -14,10 +14,13 @@
 #ifdef HAVE_OPENBLAS
 #include <cblas.h>
 #endif
+#include <thread>
 
 // only test NxN matrix, N is multiple of 16
 // the parameter 's' in the following functions is the stride of the matrix.
 #define N (1024)
+
+// #define ENABLE_PREFETCH
 
 // create 64 byte aligned buffer.
 typedef std::shared_ptr<float> BufferPtr;
@@ -263,6 +266,15 @@ void matfma_avx512_Nx16(__m512 out[DIM], const float *A, int sa, const float *B,
     }
 }
 // out = AxB
+void matfma_avx512_16x16(float *out, int so, const float *A, int sa, const float *B, int sb)
+{
+    __m512 o[16];
+    for (int i = 0; i < 16; i++)
+        o[i] = _mm512_load_ps(&out[i * so]);
+    matfma_avx512_Nx16<16>(o, A, sa, B, sb);
+    for (int i = 0; i < 16; i++)
+        _mm512_store_ps(&out[i * so], o[i]);
+}
 void matmul_avx512_16x16(float *out, int so, const float *A, int sa, const float *B, int sb)
 {
     __m512 o[16] = {0};
@@ -297,9 +309,16 @@ void matfma_avx512_32x32(float *out, int so, const float *A, int sa, const float
                 _mm512_store_ps(&outij[k * so], o[k]);
         }
 }
-
+// prefetch block
+inline void pre_fetch_block(int x, int y, int locality, const float *M, int n, int s, int Bx, int By)
+{
+#ifdef ENABLE_PREFETCH
+    auto block = mat_block2(x, y, M, n, s, Bx, By);
+    for (int i = 0; i < 16; i++)
+        __builtin_prefetch((const char *)&block[i * s], 0, locality);
+#endif
+}
 // fast if n <= 512
-const static int FAST_BLOCK_SIZE = 512;
 void matmul_avx512_block_tiny(float *out, const float *A, const float *B, int n, int s)
 {
     const int V_BLOCK_SIZE = 16;   // V_BLOCK_SIZE lines of A should be fit in the L1 cache
@@ -319,6 +338,11 @@ void matmul_avx512_block_tiny(float *out, const float *A, const float *B, int n,
 
             for (int k = 0; k < BLOCK_NUM; k++)
             {
+                if (k == BLOCK_NUM - 1)
+                {
+                    pre_fetch_block(i, 0, 0, A, n, s, BLOCK_NUM, BLOCK_NUM);
+                    pre_fetch_block(0, (j + 1) % BLOCK_NUM, 0, B, n, s, BLOCK_NUM, BLOCK_NUM);
+                }
                 auto Aik = mat_block2(i, k, A, n, s, V_BLOCK_NUM, BLOCK_NUM);
                 auto Bkj = mat_block2(k, j, B, n, s, BLOCK_NUM, BLOCK_NUM);
                 matfma_avx512_Nx16<V_BLOCK_SIZE>(o, Aik, s, Bkj, s);
@@ -330,7 +354,7 @@ void matmul_avx512_block_tiny(float *out, const float *A, const float *B, int n,
     }
 }
 
-void matmfa_avx512_block_tiny(float *out, const float *A, const float *B, int n, int s)
+void matmfa_avx512_block_tiny_v(float *out, const float *A, const float *B, int n, int s)
 {
     int BLOCK_NUM = n / 16;
 
@@ -349,6 +373,11 @@ void matmfa_avx512_block_tiny(float *out, const float *A, const float *B, int n,
 
             for (int k = 0; k < BLOCK_NUM; k++)
             {
+                if (k == BLOCK_NUM - 1)
+                {
+                    pre_fetch_block(i, 0, 0, A, n, s, BLOCK_NUM, BLOCK_NUM);
+                    pre_fetch_block(0, (j + 1) % BLOCK_NUM, 0, B, n, s, BLOCK_NUM, BLOCK_NUM);
+                }
                 auto Aik = mat_block2(i, k, A, n, s, BLOCK_NUM, BLOCK_NUM);
                 auto Bkj = mat_block2(k, j, B, n, s, BLOCK_NUM, BLOCK_NUM);
                 matfma_avx512_Nx16<16>(o, Aik, s, Bkj, s);
@@ -359,15 +388,52 @@ void matmfa_avx512_block_tiny(float *out, const float *A, const float *B, int n,
         }
     }
 }
+void matmfa_avx512_block_tiny_h(float *out, const float *A, const float *B, int n, int s)
+{
+    int BLOCK_NUM = n / 16;
 
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int i = 0; i < BLOCK_NUM; i++)
+    {
+        bind_cpu();
+        for (int j = 0; j < BLOCK_NUM; j++)
+        {
+            for (int k = 0; k < BLOCK_NUM; k++)
+            {
+                auto Aij = mat_block2(i, j, A, n, s, BLOCK_NUM, BLOCK_NUM);
+                auto outik = mat_block2(i, k, out, n, s, BLOCK_NUM, BLOCK_NUM);
+                auto Bjk = mat_block2(j, k, B, n, s, BLOCK_NUM, BLOCK_NUM);
+
+                if (k == BLOCK_NUM - 1)
+                {
+                    pre_fetch_block(i, (j + 1) % BLOCK_NUM, 0, A, n, s, BLOCK_NUM, BLOCK_NUM);
+                    pre_fetch_block((j + 1) % BLOCK_NUM, 0, 0, B, n, s, BLOCK_NUM, BLOCK_NUM);
+                }
+
+                matfma_avx512_16x16(outik, s, Aij, s, Bjk, s);
+            }
+        }
+    }
+}
+
+// the addition order is smae as matmul_cache_friendly
+// but because of the block operation, the performance is same as
+// the addtion order of matmul_base.
 void matfma_avx512_block(float *out, const float *A, const float *B, int n, int s)
 {
-    if (n <= FAST_BLOCK_SIZE)
+    auto block_func = matmfa_avx512_block_tiny_v;
+    int BLOCK_SIZE = 512;
+
+    // if the stride of the sub matrix is too large.
+    // matmfa_avx512_block_tiny_h is faster than matmfa_avx512_block_tiny_v
+    // it seems the prefech is not working well when the stride is too large.
+    if (s > 1024)
     {
-        return matmfa_avx512_block_tiny(out, A, B, n, s);
+        block_func = matmfa_avx512_block_tiny_h;
+        BLOCK_SIZE = 1024;
     }
 
-    int BLOCK_NUM = n / FAST_BLOCK_SIZE;
+    int BLOCK_NUM = n / BLOCK_SIZE;
 
     for (int i = 0; i < BLOCK_NUM; i++)
     {
@@ -378,7 +444,8 @@ void matfma_avx512_block(float *out, const float *A, const float *B, int n, int 
                 auto outik = mat_block2(i, k, out, n, s, BLOCK_NUM, BLOCK_NUM);
                 auto Aij = mat_block2(i, j, A, n, s, BLOCK_NUM, BLOCK_NUM);
                 auto Bjk = mat_block2(j, k, B, n, s, BLOCK_NUM, BLOCK_NUM);
-                matmfa_avx512_block_tiny(outik, Aij, Bjk, FAST_BLOCK_SIZE, s);
+
+                block_func(outik, Aij, Bjk, BLOCK_SIZE, s);
             }
         }
     }
@@ -386,6 +453,9 @@ void matfma_avx512_block(float *out, const float *A, const float *B, int n, int 
 
 void matmul_avx512_block(float *out, const float *A, const float *B, int n, int s)
 {
+    if (n <= 512)
+        return matmul_avx512_block_tiny(out, A, B, n, s);
+
     mat_clear(out, n, s);
     return matfma_avx512_block(out, A, B, n, s);
 }
@@ -603,7 +673,7 @@ void benchmark_mem()
 #define BENCHMARK_FUNCTION(func, cnt) benchmark_fun(func, (cnt), #func, 1)
 #define BENCHMARK_FUNCTION_LOOP(func, cnt, loop) benchmark_fun(func, (cnt), #func, (loop))
 
-#define TEST_INIT(s)                                \
+#define TEST_INIT_B(s, baseline)                    \
     int SIZE = s;                                   \
     std::vector<BufferPtr> buffers;                 \
     auto alloctor = [&buffers, SIZE]() -> float * { \
@@ -616,7 +686,13 @@ void benchmark_mem()
     auto C2 = alloctor();                           \
     mat_init(A, SIZE);                              \
     mat_init(B, SIZE);                              \
-    matmul_base(C1, A, B, SIZE, SIZE)
+    baseline(C1, A, B, SIZE, SIZE);
+
+#ifdef HAVE_OPENBLAS
+#define TEST_INIT(s) TEST_INIT_B(s, matmul_openblas)
+#else
+#define TEST_INIT(s) TEST_INIT_B(s, matmul_openblas)
+#endif
 
 #define CHECK_FUN(fun)          \
     mat_clear(C2, SIZE, SIZE);  \
@@ -653,32 +729,49 @@ void check_n(int n)
 
     TEST_INIT(n);
 
-    CHECK_FUN(matmul_cache_friendly);
+    if (n <= 1024)
+    {
+        CHECK_FUN(matmul_cache_friendly);
+    }
 
 #if AVX512F_CHECK
-    CHECK_FUN(matmul_avx512);
+    if (n <= 1024)
+    {
+        CHECK_FUN(matmul_avx512);
+    }
     CHECK_FUN(matmul_avx512_block);
     CHECK_FUN(matmul_avx512_block_tiny);
-#endif
-#ifdef HAVE_OPENBLAS
-    CHECK_FUN(matmul_openblas);
 #endif
     CHECK_FUN(matmul_strassen);
 }
 
 void check_correct()
 {
+    if (N < 16 || (N & 0xf))
+    {
+        printf("N should be multiple of 16 and greater than 16\n");
+        exit(1);
+    }
 #if AVX512F_CHECK
     check_16();
     check_32();
 #endif
-
-    for (int n = 32; n <= 1024; n *= 2)
+#ifdef HAVE_OPENBLAS
+    const int MAX_N = 4096;
+#else
+    const int MAX_N = 1024;
+#endif
+    for (int n = 32; n <= MAX_N; n *= 2)
         check_n(n);
     ;
 }
+void init()
+{
+    limit_max_num_threads();
+}
 int main(int argc, char *argv[])
 {
+    init();
     check_correct();
 
     const float N_1024 = N / 1024.0;
@@ -693,7 +786,8 @@ int main(int argc, char *argv[])
         BENCHMARK_FUNCTION(matmul_base, 1);
     }
 
-    BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
+    if (N <= 1024)
+        BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
     BENCHMARK_FUNCTION(matsub_base, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matadd_base, ADD_LOOP_CNT);
 #ifdef HAVE_OPENBLAS
@@ -705,10 +799,12 @@ int main(int argc, char *argv[])
     BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matsub_avx512, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matmul_avx512_block, MUL_LOOP_CNT);
-    BENCHMARK_FUNCTION(matmul_avx512_block_tiny, MUL_LOOP_CNT);
-    BENCHMARK_FUNCTION(matmul_avx512, MUL_LOOP_CNT);
+    if (N <= 1024)
+        BENCHMARK_FUNCTION(matmul_avx512_block_tiny, MUL_LOOP_CNT);
+    if (N <= 4096)
+        BENCHMARK_FUNCTION(matmul_avx512, MUL_LOOP_CNT);
 #endif
 
-    benchmark_mem();
+    // benchmark_mem();
     return 0;
 }

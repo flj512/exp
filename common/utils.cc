@@ -8,6 +8,9 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+#include <thread>
+#include <cstdlib>
+#include <string>
 
 int64_t get_current_time_us()
 {
@@ -43,9 +46,32 @@ void bind_cpu()
     pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
     if (get_cpu() != target_cpu)
     {
-        printf("bind failed\n");
+        printf("bind cpu failed\n");
+        exit(1);
     }
 #else
 #pragma warning("bind_cpu is not implemented on this platform");
+#endif
+}
+void limit_max_num_threads()
+{
+#ifdef _OPENMP
+    int max_threads = std::thread::hardware_concurrency();
+    int current_threads = max_threads;
+
+    std::string key = "OMP_NUM_THREADS";
+    char *env = std::getenv(key.c_str());
+    if (env)
+    {
+        current_threads = std::atoi(env);
+    }
+
+    if (current_threads > max_threads / 2)
+    {
+        current_threads = max_threads / 2;
+        omp_set_num_threads(current_threads);
+    }
+
+    printf("Using omp num threads = %d, max = %d\n", current_threads, max_threads);
 #endif
 }
