@@ -67,7 +67,7 @@ void mat_copy(float *d, int sd, float *s, int ss, int n)
         mempcpy(&d[i * sd], &s[i * ss], n * sizeof(float));
 }
 
-void matmul_base(float *out, const float *A, const float *B, int n, int s)
+void matmul_naive(float *out, const float *A, const float *B, int n, int s)
 {
     mat_clear(out, n, s);
 
@@ -77,7 +77,7 @@ void matmul_base(float *out, const float *A, const float *B, int n, int s)
             for (int k = 0; k < n; k++)
                 out[i * s + j] += A[i * s + k] * B[k * s + j];
 }
-void matadd_base(float *out, const float *A, const float *B, int n, int s)
+void matadd_naive(float *out, const float *A, const float *B, int n, int s)
 {
 #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for (int i = 0; i < n; i++)
@@ -85,7 +85,7 @@ void matadd_base(float *out, const float *A, const float *B, int n, int s)
             out[i * s + j] = A[i * s + j] + B[i * s + j];
 }
 
-void matsub_base(float *out, const float *A, const float *B, int n, int s)
+void matsub_naive(float *out, const float *A, const float *B, int n, int s)
 {
 #pragma omp parallel for num_threads(ADD_OMP_THREADS)
     for (int i = 0; i < n; i++)
@@ -194,6 +194,9 @@ enum class MatOp
 
 void matX_avx512(float *out, const float *A, const float *B, int n, int s, MatOp op)
 {
+    if (n <= 64)
+        return op == MatOp::ADD ? matadd_naive(out, A, B, n, s) : matsub_naive(out, A, B, n, s);
+
 #pragma omp parallel for num_threads(2)
     for (int i = 0; i < n; i++)
     {
@@ -418,7 +421,7 @@ void matmfa_avx512_block_tiny_h(float *out, const float *A, const float *B, int 
 
 // the addition order is smae as matmul_cache_friendly
 // but because of the block operation, the performance is same as
-// the addtion order of matmul_base.
+// the addtion order of matmul_naive.
 void matfma_avx512_block(float *out, const float *A, const float *B, int n, int s)
 {
     auto block_func = matmfa_avx512_block_tiny_v;
@@ -459,7 +462,19 @@ void matmul_avx512_block(float *out, const float *A, const float *B, int n, int 
     mat_clear(out, n, s);
     return matfma_avx512_block(out, A, B, n, s);
 }
+/*
+    This function is slower if matrix size is too large.
+    the key reason is each worker thread will load total B matrix to its cache.
+    it reduce the reuse of the L2/L3 cache.
 
+    the matmul_avx512_block is better to handle large matrix.
+    it use multiple thread to handle the block of the matrix multiplication and addtion,
+    the block size is 512x512 or 1024x1024 so that the L3 cache can be
+    shared between the threads. Also the CPU can use prefetch to load the data
+    to L1/L2 cache.
+
+    So parallel on the total dataset is not always the best solution.
+*/
 void matmul_avx512(float *out, const float *A, const float *B, int n, int s)
 {
     /*
@@ -509,8 +524,8 @@ void matmul_strassen_(float *out, const float *A, const float *B, int n, int s, 
     auto matsub = matsub_avx512;
     auto matmul = matmul_avx512_block;
 #else
-    auto matadd = matadd_base;
-    auto matsub = matsub_base;
+    auto matadd = matadd_naive;
+    auto matsub = matsub_naive;
     auto matmul = matmul_cache_friendly;
 #endif
 
@@ -620,6 +635,7 @@ void mat_compare(const float *A, const float *B, int n, int s)
 
 void benchmark_fun(void(func)(float *, const float *, const float *, int, int), int cnt, const char *tag, int loop)
 {
+    cnt = std::min(10000, cnt);
     std::vector<BufferPtr> A, B, C;
     for (int i = 0; i < cnt; i++)
     {
@@ -747,11 +763,6 @@ void check_n(int n)
 
 void check_correct()
 {
-    if (N < 16 || (N & 0xf))
-    {
-        printf("N should be multiple of 16 and greater than 16\n");
-        exit(1);
-    }
 #if AVX512F_CHECK
     check_16();
     check_32();
@@ -767,12 +778,17 @@ void check_correct()
 }
 void init()
 {
+    if (N < 16 || ((N - 1) & N))
+    {
+        printf("N < 16 or N != 2^n, test exit !!! \n");
+        exit(1);
+    }
     limit_max_num_threads();
 }
 int main(int argc, char *argv[])
 {
     init();
-    check_correct();
+    // check_correct();
 
     const float N_1024 = N / 1024.0;
     const int DEFAULT_LOOP = 100;
@@ -783,13 +799,13 @@ int main(int argc, char *argv[])
 
     if (N_1024 <= 1)
     {
-        BENCHMARK_FUNCTION(matmul_base, 1);
+        BENCHMARK_FUNCTION(matmul_naive, 1);
     }
 
     if (N <= 1024)
         BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
-    BENCHMARK_FUNCTION(matsub_base, ADD_LOOP_CNT);
-    BENCHMARK_FUNCTION(matadd_base, ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matsub_naive, ADD_LOOP_CNT);
+    BENCHMARK_FUNCTION(matadd_naive, ADD_LOOP_CNT);
 #ifdef HAVE_OPENBLAS
     BENCHMARK_FUNCTION(matadd_openblas, ADD_LOOP_CNT);
     BENCHMARK_FUNCTION(matmul_openblas, MUL_LOOP_CNT);

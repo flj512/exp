@@ -11,4 +11,5 @@ Simple C++ code used to experiment with the following features
 | L1/L2 Cache  | mat  | 
 | OpenMP | mat |
 | AVX2 | mat |
+| Prefetch | mat |
 |Perfert Forwarding|metaprogram|
