@@ -733,14 +733,7 @@ void init() {
   }
   limit_max_num_threads();
 }
-int main(int argc, char *argv[]) {
-  init();
-
-  if (argc > 1) {
-    check_correct();
-    return 0;
-  }
-
+void benchmark() {
   const float N_1024 = N / 1024.0;
   const int DEFAULT_LOOP = 100;
   const int MUL_LOOP_CNT =
@@ -779,5 +772,15 @@ int main(int argc, char *argv[]) {
 #endif
 
   benchmark_mem();
+}
+int main(int argc, char *argv[]) {
+  init();
+
+  if (argc > 1) {
+    check_correct();
+    return 0;
+  }
+
+  benchmark();
   return 0;
 }
