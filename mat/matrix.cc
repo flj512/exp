@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "common/utils.h"
-#define AVX512F_CHECK defined(__GNUC__) && defined(__AVX512F__)
+#define AVX512F_CHECK (defined(__GNUC__) && defined(__AVX512F__))
 #if AVX512F_CHECK
 #include <immintrin.h>
 #endif
@@ -17,15 +17,15 @@
 #endif
 #include <thread>
 
-// only test NxN matrix, N is multiple of 16
+// only test (dimN x dimN) matrix, dimN is multiple of 16
 // the parameter 's' in the following functions is the stride of the matrix.
-#define N (1024)
+static int dimN = 1024;
 
 // #define ENABLE_PREFETCH
 
 // create 64 byte aligned buffer.
 typedef std::shared_ptr<float> BufferPtr;
-BufferPtr make_buffer(int n = N, int s = N) {
+BufferPtr make_buffer(int n, int s) {
   const int buffer_size = n * s * sizeof(float);
   const int aliagn = 64;
   return BufferPtr((float *)std::aligned_alloc(aliagn, buffer_size),
@@ -596,18 +596,18 @@ void benchmark_fun(void(func)(float *, const float *, const float *, int, int),
   cnt = std::min(10000, cnt);
   std::vector<BufferPtr> A, B, C;
   for (int i = 0; i < cnt; i++) {
-    A.push_back(make_buffer());
-    B.push_back(make_buffer());
-    C.push_back(make_buffer());
-    mat_init(A.back().get(), N, false);
-    mat_init(B.back().get(), N, false);
-    mat_init(C.back().get(), N, false);
+    A.push_back(make_buffer(dimN, dimN));
+    B.push_back(make_buffer(dimN, dimN));
+    C.push_back(make_buffer(dimN, dimN));
+    mat_init(A.back().get(), dimN, false);
+    mat_init(B.back().get(), dimN, false);
+    mat_init(C.back().get(), dimN, false);
   }
 
   auto start = get_current_time_us();
   for (int l = 0; l < loop; l++)
     for (int i = 0; i < cnt; i++)
-      func(C[i].get(), A[i].get(), B[i].get(), N, N);
+      func(C[i].get(), A[i].get(), B[i].get(), dimN, dimN);
   printf("%s = %0.4f ms, %d times\n", tag,
          (get_current_time_us() - start) / 1000.0f / (cnt * loop), cnt * loop);
 }
@@ -664,7 +664,7 @@ void benchmark_mem() {
 #ifdef HAVE_OPENBLAS
 #define TEST_INIT(s) TEST_INIT_B(s, matmul_openblas)
 #else
-#define TEST_INIT(s) TEST_INIT_B(s, matmul_openblas)
+#define TEST_INIT(s) TEST_INIT_B(s, matmul_naive)
 #endif
 
 #define CHECK_FUN(fun)        \
@@ -726,24 +726,49 @@ void check_correct() {
   for (int n = 32; n <= MAX_N; n *= 2) check_n(n);
   ;
 }
-void init() {
-  if (N < 16 || ((N - 1) & N)) {
+void help(char *argv[]) {
+  printf(
+      "Usage: %s check|benchmark|profiler <N>\n\tN is optional, default value "
+      "is "
+      "%d\n",
+      argv[0], dimN);
+  exit(1);
+}
+int init(int argc, char *argv[]) {
+  if (argc < 2) {
+    help(argv);
+  }
+  int ret = 0;
+  if (strcmp(argv[1], "check") == 0) {
+    ret = 0;
+  } else if (strcmp(argv[1], "benchmark") == 0) {
+    ret = 1;
+  } else if (strcmp(argv[1], "profiler") == 0) {
+    ret = 2;
+  } else {
+    help(argv);
+  }
+  if (argc > 2) {
+    dimN = atoi(argv[2]);
+  }
+  if (dimN < 16 || ((dimN - 1) & dimN)) {
     printf("N < 16 or N != 2^n, test exit !!! \n");
     exit(1);
   }
   limit_max_num_threads();
+  return ret;
 }
 void benchmark() {
-  const float N_1024 = N / 1024.0;
-  const int DEFAULT_LOOP = 100;
-  const int MUL_LOOP_CNT =
+  float N_1024 = dimN / 1024.0;
+  int DEFAULT_LOOP = 100;
+  int MUL_LOOP_CNT =
       (int)(N_1024 <= 1
                 ? DEFAULT_LOOP / (N_1024 * N_1024)
                 : std::max(1.0f, DEFAULT_LOOP / (N_1024 * N_1024 * N_1024)));
   const int ADD_LOOP_CNT =
       (int)std::max(1.0f, DEFAULT_LOOP * 4 / (N_1024 * N_1024));
 
-  printf("\n------ %dx%d matrix benchmark ------\n", N, N);
+  printf("\n------ %dx%d matrix benchmark ------\n", dimN, dimN);
 
   BENCHMARK_FUNCTION(matsub_naive, ADD_LOOP_CNT);
   BENCHMARK_FUNCTION(matadd_naive, ADD_LOOP_CNT);
@@ -759,7 +784,7 @@ void benchmark() {
     BENCHMARK_FUNCTION(matmul_naive, 1);
   }
 
-  if (N <= 1024) BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
+  if (dimN <= 1024) BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
 
 #ifdef HAVE_OPENBLAS
   BENCHMARK_FUNCTION(matmul_openblas, MUL_LOOP_CNT);
@@ -767,20 +792,30 @@ void benchmark() {
   BENCHMARK_FUNCTION(matmul_strassen, MUL_LOOP_CNT);
 #if AVX512F_CHECK
   BENCHMARK_FUNCTION(matmul_avx512_block, MUL_LOOP_CNT);
-  if (N <= 1024) BENCHMARK_FUNCTION(matmul_avx512_block_tiny, MUL_LOOP_CNT);
-  if (N <= 4096) BENCHMARK_FUNCTION(matmul_avx512_entire, MUL_LOOP_CNT);
+  if (dimN <= 1024) BENCHMARK_FUNCTION(matmul_avx512_block_tiny, MUL_LOOP_CNT);
+  if (dimN <= 4096) BENCHMARK_FUNCTION(matmul_avx512_entire, MUL_LOOP_CNT);
 #endif
 
   benchmark_mem();
 }
+
+void profiler() { BENCHMARK_FUNCTION(matmul_cache_friendly, 10); }
+
 int main(int argc, char *argv[]) {
-  init();
+  int ret = init(argc, argv);
 
-  if (argc > 1) {
-    check_correct();
-    return 0;
+  switch (ret) {
+    case 0:
+      check_correct();
+      break;
+    case 1:
+      benchmark();
+      break;
+    case 2:
+      profiler();
+      break;
+    default:
+      break;
   }
-
-  benchmark();
   return 0;
 }
