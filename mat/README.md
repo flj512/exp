@@ -9,9 +9,9 @@ Benchmark 1024x1024 matrix with specific threads
 `OMP_NUM_THREADS=2 ./mat/matrix benchmark`
 
 # Test Result
-Test result on my laptop (8 core 16 threads), pytorch uses 8 threads by default  
+Test result on my laptop (8 core 16 threads)  
 CPU: 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz  
-RAM: 16GB DDR4 3200MHz  
+RAM: 16GB DDR4 3200MT/S  
 OS: Ubuntu 20.04.2 LTS  
 Caches (sum of all):      
 &nbsp;&nbsp;&nbsp;&nbsp;L1d:                    384 KiB (8 instances)  
@@ -19,7 +19,8 @@ Caches (sum of all):
 &nbsp;&nbsp;&nbsp;&nbsp;L2:                     10 MiB (8 instances)  
 &nbsp;&nbsp;&nbsp;&nbsp;L3:                     24 MiB (1 instance)  
 
-Compiler Clang 14.0.0  
+Compiler Clang 14.0.0, OMP 8 threads.  
+Pytorch uses 8 threads by default  
 ## 512x512 matrix benchmark
 ```
 [multiple]
