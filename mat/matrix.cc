@@ -78,10 +78,6 @@ void matsub_naive(float *out, const float *A, const float *B, int n, int s) {
 }
 
 #ifdef HAVE_OPENBLAS
-void matadd_openblas(float *out, const float *A, const float *B, int n, int s) {
-  cblas_saxpy(n * n, 1.0f, A, 1, out, 1);
-  cblas_saxpy(n * n, 1.0f, B, 1, out, 1);
-}
 void matmul_openblas(float *out, const float *A, const float *B, int n, int s) {
   float alpha = 1.0f;
   float beta = 0.0f;
@@ -624,7 +620,7 @@ void benchmark_mem() {
   auto start = get_current_time_us();
   for (int n = 0; n < nIter; n++)
     for (int i = 0; i < nLoop; i++) memcpy(B[i].get(), A[i].get(), matSize);
-  printf("\nmemcpy speed = %0.4f GB/s, total Copied %0.1f GB\n",
+  printf("memcpy speed = %0.4f GB/s, total Copied %0.1f GB\n",
          nTotalGB * 1000000 / (get_current_time_us() - start), nTotalGB);
 
 #if AVX512F_CHECK
@@ -762,24 +758,12 @@ void benchmark() {
   const int ADD_LOOP_CNT =
       (int)std::max(1.0f, DEFAULT_LOOP * 4 / (N_1024 * N_1024));
 
-  printf("\n------ %dx%d matrix benchmark ------\n", dimN, dimN);
-
-  BENCHMARK_FUNCTION(matsub_naive, ADD_LOOP_CNT);
-  BENCHMARK_FUNCTION(matadd_naive, ADD_LOOP_CNT);
-#ifdef HAVE_OPENBLAS
-  BENCHMARK_FUNCTION(matadd_openblas, ADD_LOOP_CNT);
-#endif
-#if AVX512F_CHECK
-  BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
-  BENCHMARK_FUNCTION(matsub_avx512, ADD_LOOP_CNT);
-#endif
-  printf("\n");
+  printf("\n====== %dx%d matrix benchmark ======\n", dimN, dimN);
+  printf("[multiple]\n");
   if (N_1024 <= 1) {
     BENCHMARK_FUNCTION(matmul_naive, 1);
   }
-
   if (dimN <= 1024) BENCHMARK_FUNCTION(matmul_cache_friendly, MUL_LOOP_CNT);
-
 #ifdef HAVE_OPENBLAS
   BENCHMARK_FUNCTION(matmul_openblas, MUL_LOOP_CNT);
 #endif
@@ -790,14 +774,54 @@ void benchmark() {
   if (dimN <= 4096) BENCHMARK_FUNCTION(matmul_avx512_entire, MUL_LOOP_CNT);
 #endif
 
+  printf("\n[add & sub]\n");
+  BENCHMARK_FUNCTION(matsub_naive, ADD_LOOP_CNT);
+  BENCHMARK_FUNCTION(matadd_naive, ADD_LOOP_CNT);
+#if AVX512F_CHECK
+  BENCHMARK_FUNCTION(matadd_avx512, ADD_LOOP_CNT);
+  BENCHMARK_FUNCTION(matsub_avx512, ADD_LOOP_CNT);
+#endif
+
+  printf("\n[memory]\n");
   benchmark_mem();
 }
 
-void profiler() { BENCHMARK_FUNCTION(matmul_cache_friendly, 10); }
+void profiler(int type) {
+  const int loop = 10;
+  switch (type) {
+    case 0:
+      BENCHMARK_FUNCTION(matmul_naive, loop);
+      break;
+    case 1:
+      BENCHMARK_FUNCTION(matmul_cache_friendly, loop);
+      break;
+    case 2:
+      BENCHMARK_FUNCTION(matmul_strassen, loop);
+      break;
+#if AVX512F_CHECK
+    case 3:
+      BENCHMARK_FUNCTION(matmul_avx512_block, loop);
+      break;
+    case 4:
+      BENCHMARK_FUNCTION(matmul_avx512_block_tiny, loop);
+      break;
+    case 5:
+      BENCHMARK_FUNCTION(matmul_avx512_entire, loop);
+      break;
+#endif
+#ifdef HAVE_OPENBLAS
+    case 6:
+      BENCHMARK_FUNCTION(matmul_openblas, loop);
+      break;
+#endif
+    default:
+      printf("profiler type error\n");
+      break;
+  }
+}
 
 int main(int argc, char *argv[]) {
   int ret = init(argc, argv);
-
   switch (ret) {
     case 0:
       check_correct();
@@ -806,7 +830,7 @@ int main(int argc, char *argv[]) {
       benchmark();
       break;
     case 2:
-      profiler();
+      profiler(argc > 3 ? atoi(argv[3]) : 0);
       break;
     default:
       break;
