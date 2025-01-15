@@ -1,4 +1,4 @@
-find_package(OpenMP REQUIRED)
+find_package(OpenMP QUIET)
 
 add_library(common utils.cc)
 if(OpenMP_CXX_FOUND)

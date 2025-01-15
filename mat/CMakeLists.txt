@@ -1,5 +1,5 @@
-find_package(PkgConfig REQUIRED)
-find_package(OpenMP REQUIRED)
+find_package(PkgConfig QUIET)
+find_package(OpenMP QUIET)
 
 add_executable(matrix matrix.cc)
 
@@ -8,11 +8,13 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 # openblas support
-pkg_check_modules(OPENBLAS REQUIRED openblas64)
-if(OPENBLAS_FOUND)
-    target_compile_definitions(matrix PRIVATE HAVE_OPENBLAS)
-    target_include_directories(matrix PRIVATE ${OPENBLAS_INCLUDE_DIRS})
-    target_link_libraries(matrix PRIVATE ${OPENBLAS_LIBRARIES})
+if(PkgConfig_FOUND)
+    pkg_check_modules(OPENBLAS REQUIRED openblas64)
+    if(OPENBLAS_FOUND)
+        target_compile_definitions(matrix PRIVATE HAVE_OPENBLAS)
+        target_include_directories(matrix PRIVATE ${OPENBLAS_INCLUDE_DIRS})
+        target_link_libraries(matrix PRIVATE ${OPENBLAS_LIBRARIES})
+    endif()
 endif()
 
 # AVX512 support

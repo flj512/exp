@@ -57,12 +57,6 @@ void mat_clear(float *m, int n, int s) {
   for (int i = 0; i < n; i++) memset(m + i * s, 0, n * sizeof(float));
 }
 
-// copy nxn matrix
-void mat_copy(float *d, int sd, float *s, int ss, int n) {
-  for (int i = 0; i < n; i++)
-    mempcpy(&d[i * sd], &s[i * ss], n * sizeof(float));
-}
-
 void matmul_naive(float *out, const float *A, const float *B, int n, int s) {
   mat_clear(out, n, s);
 
